@@ -29,8 +29,8 @@ class COSService:
         """
         load_dotenv()
         self.api_key = os.getenv("IBM_CLOUD_API_KEY")
-        self.instance_id = os.getenv("COS_INSTANCE_ID")
-        self.endpoint = os.getenv("COS_ENDPOINT_URL")
+        self.instance_id = os.getenv("COS_SERVICE_INSTANCE_ID")
+        self.endpoint = os.getenv("COS_ENDPOINT")
         self.bucket_name = bucket_name
 
         # Validate environment variables

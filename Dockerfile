@@ -11,7 +11,7 @@ RUN pip3 install -r requirements.txt
 COPY main.py main.py
 COPY app/ app/
 
-EXPOSE 3001
+EXPOSE 4050
 
 # Set the command to run your Python script
 CMD ["python3", "main.py"]

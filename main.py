@@ -18,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger("api-service")
 
 # Environment variable fallback
-SERVER_URL = os.getenv("SERVER_URL", "http://localhost:3001")
+SERVER_URL = os.getenv("SERVER_URL", "http://localhost:4050")
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 
 # FastAPI application instance
@@ -57,4 +57,4 @@ logger.info("Starting API service...")
 
 # Application entry point
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=3001, log_level="info")
+    uvicorn.run("main:app", host="0.0.0.0", port=4050, log_level="info")
