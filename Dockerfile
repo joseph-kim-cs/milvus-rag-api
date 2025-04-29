@@ -1,4 +1,3 @@
-# Use the official Selenium Standalone Chrome image as the base image
 FROM registry.access.redhat.com/ubi8/python-311:latest
 
 # Set the working directory inside the container
