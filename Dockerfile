@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi8/python-311:latest
+FROM python:3.11-alpine
 
 # Set the working directory inside the container
 WORKDIR /app/backend
