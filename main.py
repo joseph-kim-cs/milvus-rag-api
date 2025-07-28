@@ -1,10 +1,9 @@
-import os
-import logging
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-#from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import logging
+import os
 import uvicorn
+from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
@@ -21,15 +20,24 @@ logger = logging.getLogger("api-service")
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:4050")
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 
-# FastAPI application instance
+# FastAPI instance
 app = FastAPI(
-    title="Milvus RAG API",
-    description="Hybrid search RAG with Milvus",
-    version="1.0.1-fastapi",
-    servers=[{"url": SERVER_URL}],
+    title="RAG Service API",
+    description="watsonx.ai - Hybrid search RAG with Milvus",
+    version="0.0.1-fastapi",
+    servers=[{"url": SERVER_URL}]
 )
 
-# Register routes
+# Middleware for CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all for testing
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register root route
 from app.route.root import routes as root_api
 app.include_router(root_api.root_api_route)
 
@@ -39,18 +47,11 @@ app.include_router(ingest_api.ingest_api_route)
 from app.route.query import routes as query_api
 app.include_router(query_api.query_api_route)
 
+'''
 # Middleware for trusted hosts
 # TRUSTED_HOSTS = os.getenv("TRUSTED_HOSTS", "localhost,127.0.0.1").split(",")
 # app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
-
-# Middleware for CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,  # Update environment variable for flexibility
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+'''
 
 # Start logging
 logger.info("Starting API service...")
