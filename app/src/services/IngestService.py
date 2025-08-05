@@ -9,27 +9,34 @@ import logging
 import ast
 
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
-from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.document_converter import DocumentConverter, PdfFormatOption # import extra support for .json, markdown, HTML
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel.base_models import InputFormat
 from docling.chunking import HybridChunker
 import time
 
-from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
+# new packages
+from docling.document_converter import MarkdownFormatOption, FormatOption
+from docling.backend.json.docling_json_backend import DoclingJSONBackend
+from docling.pipeline.simple_pipeline import SimplePipeline
+from langchain_ibm.embeddings import WatsonxEmbeddings
+from docling_core.types.doc import DoclingDocument, TextItem, GroupItem, ContentLayer, RefItem, DocumentOrigin
+
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter # more splitter support / code-level custom splitters
 
 
 from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 from transformers import AutoTokenizer
 from pymilvus import (
-FieldSchema,
-CollectionSchema,
-DataType,
-Collection,
-AnnSearchRequest,
-RRFRanker,
-WeightedRanker,
-connections,
-MilvusClient
+    FieldSchema,
+    CollectionSchema,
+    DataType,
+    Collection,
+    AnnSearchRequest,
+    RRFRanker,
+    WeightedRanker,
+    connections,
+    MilvusClient
 )
 
 # remove if debugging
@@ -44,7 +51,7 @@ logging.basicConfig(
 
 ########## Functions to initialize environment ##########
 
-def init_environment(collection_name, chunk_type):
+def init_environment(collection_name, chunk_type): # chunk type is where you can choose between a markdown and a recursive text splitter
     try:
         load_dotenv()
         config = {
@@ -75,22 +82,86 @@ def validate_environment(config):
     
 ########## Main functions ##########    
 
+
+# MAIN INGESTION PIPELINE
+
+# THINGS TO CHANGE: 
+'''
+DENSE EMBEDDING SUPPORT: ibm/slate-125m-english-rtrvr
+    parameter: choosing hybrid, dense+sparse, or just dense
+SPARSE EMBEDDING SUPPORT: BM25 sparse embedding model with BM25BuiltInFunction
+LOADER SUPPORT: including just markdown loaders for now
+DOCLING SUPPORT: vs langchain splitters
+CODE LEVEL CUSTOMIZATIONS (CUSTOM SCHEMA)
+'''
+
+# Step 1: look at main pipeline functions and see where they are called
+# check the functions to see what functionalities they have
+# Step 2: modify the functions so that they work one step at a time
+# Step 3: test the functions
+
+def json_document_converter(filename: str, doc_name: str = None) -> DoclingDocument:
+    # code-level, some level of custom code for only 'insight headings', create separate file for custom code
+    with open(filename, 'r') as file:
+        json_data = json.load(file)
+
+    text_items = []
+    paragraph_texts = []
+    text_refs = []
+
+    for key, val in json_data.items():
+        if isinstance(val, list):
+            for item in val:
+                paragraph_texts.append(f'{key}: {item}')
+        else: 
+            paragraph_texts.append(f'{key}: {val}')
+    
+    for i in range(len(paragraph_texts)):
+        text_items.append(TextItem(self_ref=f'#/texts/{i}', label='text', orig=filename, text=paragraph_texts[i]))
+        text_refs.append(RefItem(cref=f'#/texts/{i}'))
+    
+    body_group = GroupItem(
+        name="_root_",
+        self_ref="#/body",
+        content_layer=ContentLayer.BODY,
+        children=[]
+        )   
+    
+    origin_ = DocumentOrigin(mimetype='application/json', filename=filename, binary_hash=0) # set binary_hash = 0 just for functionality -- import hash function only if proceeding with this
+    
+    doc = DoclingDocument(schema_name='DoclingDocument', version='1.5.0', name=doc_name, body=body_group, groups=[body_group], texts=text_items, origin=origin_)
+
+    for i in range(len(text_items)):
+        body_group._add_child(doc=doc, stack=[], new_ref=text_refs[i])
+
+    #for i in range(len(text_refs)):
+    #    text_refs[i].parent = body_group
+
+    return doc
+
 def ingest_files(config, files):
     # set embedding model and tokenizer
-    embedding_model='BAAI/bge-m3'
+    # add parameter here so that you can determine hybrid, dense, dense+sparse
+
+    embedding_model='BAAI/bge-m3' # SET AS PARAMETER
+
     ef = BGEM3EmbeddingFunction(model_name=embedding_model, use_fp16=False, device="cpu")
     ef_tokenizer = AutoTokenizer.from_pretrained(embedding_model)
     # ef_max_tokens = 1024
 
     # convert docs to docling documents and use hybrid chunker
-    pipeline_options = PdfPipelineOptions()
+    # here, add other loaders like json loader support -> convert into docling doc
+    # Markdown
+    pipeline_options = PdfPipelineOptions() # for specific 
     pipeline_options.do_table_structure = True
     pipeline_options.table_structure_options.do_cell_matching = True
     pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE  # use ACCURATE if you prefer more accurate TableFormer model, however it's slower
 
     document_converter = DocumentConverter(format_options=
-                                        {InputFormat.PDF: PdfFormatOption(
-                                            pipeline_options=pipeline_options)})
+                                        {
+                                            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+                                            #InputFormat.MD: MarkdownFormatOption()
+                                            })
     
     print(1)
     
@@ -120,9 +191,19 @@ def ingest_files(config, files):
 
         def convert_and_hybrid_chunk(file):
             file_full_path = file['full_path']
+            filename = file['filename']
             print(f"Converting {file_full_path} to a docling document and using hybrid chunker...")
             start_time = time.time()
-            doc = document_converter.convert(file_full_path).document
+
+            file_ext = filename.lower().split('.')[-1]
+            #print(file_ext)
+
+            start_time = time.time()
+            
+            if file_ext == 'json':
+                doc = json_document_converter(file_full_path, 'json_doc')
+            else:
+                doc = document_converter.convert(file_full_path).document
 
             chunker = HybridChunker(tokenizer=ef_tokenizer)
             chunk_iter = chunker.chunk(dl_doc=doc)
@@ -130,7 +211,7 @@ def ingest_files(config, files):
             # iterate over chunks, creating a chunk document object per chunk with the content and metadata
             chunked_document_objects = []
             for chunk in chunk_iter:
-                chunked_document_object = {"page_content": chunker.serialize(chunk=chunk), "metadata": extract_metadata(chunk)}
+                chunked_document_object = {"page_content": chunker.contextualize(chunk=chunk), "metadata": extract_metadata(chunk)}
                 chunked_document_objects.append(chunked_document_object)
             end_time = time.time()
             print(f"Converted {file_full_path} to a docling document and chunked\nNumber of chunks: {len(chunked_document_objects)}\nExecution time: {round(end_time - start_time, 2)}")
@@ -146,9 +227,16 @@ def ingest_files(config, files):
             file_full_path = file['full_path']
             filename = file['filename']
             print(f"Converting {filename} to a docling document and using markdown splitter...")
-            start_time = time.time()
+            file_ext = filename.lower().split('.')[-1]
+            #print(file_ext)
 
-            doc = document_converter.convert(file_full_path).document.export_to_markdown()
+            start_time = time.time()
+            
+            if file_ext == 'json':
+                doc = json_document_converter(file_full_path, 'json_doc').export_to_markdown()
+            else: 
+                doc = document_converter.convert(file_full_path).document.export_to_markdown()
+            
             splitter = MarkdownHeaderTextSplitter(
             headers_to_split_on=[
                 ("#", "Header_1"),
@@ -214,24 +302,28 @@ def ingest_files(config, files):
                         password=config['wxd_milvus_password'])
 
     client = MilvusClient(
-    uri=f"https://{config['wxd_milvus_host']}:{config['wxd_milvus_port']}",
-    user=config['wxd_milvus_user'],
-    password=config['wxd_milvus_password'])
+        uri=f"https://{config['wxd_milvus_host']}:{config['wxd_milvus_port']}",
+        user=config['wxd_milvus_user'],
+        password=config['wxd_milvus_password']
+    )
+    
 
     # defining collection
+    # CODE LEVEL: INSERT YOUR OWN COLLECTION SCHEMA
     fields = [
         # Use auto generated id as primary key
         FieldSchema(
             name="id", dtype=DataType.VARCHAR, description='IDs', is_primary=True, auto_id=True, max_length=100
         ),
-    FieldSchema(name='text', dtype=DataType.VARCHAR, description='text', max_length=65535),
-        FieldSchema(name='page_no', dtype=DataType.VARCHAR, description='page_no', max_length=100),
+        FieldSchema(name='text', dtype=DataType.VARCHAR, description='text', max_length=65535),
+        FieldSchema(name='page_no', dtype=DataType.VARCHAR, description='page_no', max_length=100),    # comment out these since not every collection needs to include this
         FieldSchema(name='filename', dtype=DataType.VARCHAR, description='filename', max_length=300),
         FieldSchema(name="sparse_vector", dtype=DataType.SPARSE_FLOAT_VECTOR, description='sparse embedding vectors'),
         FieldSchema(name="dense_vector", dtype=DataType.FLOAT_VECTOR, description='dense embedding vectors', dim=dense_dim),
     ]
 
     collection_name = config['collection_name']
+
     if client.has_collection(collection_name=collection_name):
         client.drop_collection(collection_name=collection_name)
         print(f"Dropped existing collection: {collection_name}")

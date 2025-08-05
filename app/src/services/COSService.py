@@ -76,12 +76,12 @@ class COSService:
             logging.exception(f"Error initializing COS client: {e}")
             raise
 
-    def _validate_file_type(self, file_key: str) -> str:
+    def _validate_file_type(self, file_key: str) -> str: 
         """
         Validates the file type and returns the extension if supported.
         """
         file_ext = file_key.lower().split('.')[-1]
-        if file_ext not in ['csv', 'json']:
+        if file_ext not in ['csv', 'json', 'pdf', 'html']:
             error_msg = f"Unsupported file type: {file_ext}. Only CSV and JSON files are supported."
             logging.error(error_msg)
             raise ValueError(error_msg)
@@ -157,7 +157,7 @@ class COSService:
         
         # Default supported file extensions for Docling
         valid_extensions = ['.pdf', '.docx', '.xlsx', '.pptx', '.md', '.adoc', '.html', '.xhtml', '.csv', 
-                            '.png', '.jpg', '.jpeg', '.tiff', '.bmp']
+                            '.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.json']
         
         try:
             logging.info(f"Getting objects for ingestion from bucket: {bucket_name}")
