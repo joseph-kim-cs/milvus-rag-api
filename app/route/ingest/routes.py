@@ -76,7 +76,8 @@ async def get_ui_data(
         config = ingest_service.init_environment(collection_name, chunk_type)
         
         # Pass the files list directly to the ingest_files function
-        num_docs = ingest_service.ingest_files(config, files_list)
+        num_docs = ingest_service.ingest_files(config, files_list, # window_size = 'S', search = 'hybrid'
+                                               )
         
         # Track the time for performance analysis
         info["ingestion-time"] = time.perf_counter() - tic

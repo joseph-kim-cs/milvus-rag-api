@@ -21,6 +21,7 @@ from docling.backend.json.docling_json_backend import DoclingJSONBackend
 from docling.pipeline.simple_pipeline import SimplePipeline
 from langchain_ibm.embeddings import WatsonxEmbeddings
 from docling_core.types.doc import DoclingDocument, TextItem, GroupItem, ContentLayer, RefItem, DocumentOrigin
+from app.src.utils.ingestion_helper_functions import json_document_converter
 
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter # more splitter support / code-level custom splitters
 
@@ -59,6 +60,8 @@ def init_environment(collection_name, chunk_type): # chunk type is where you can
             'wxd_milvus_port': os.getenv("WXD_MILVUS_PORT"),          
             'wxd_milvus_user': os.getenv("WXD_MILVUS_USER"),
             'wxd_milvus_password': os.getenv("WXD_MILVUS_PASSWORD"),
+            'watsonx_apikey': os.getenv("WATSONX_APIKEY"),
+            'watsonx_project_id': os.getenv("WATSONX_PROJECT_ID"),
             'collection_name': collection_name,
             'chunk_type': chunk_type
         }
@@ -100,54 +103,24 @@ CODE LEVEL CUSTOMIZATIONS (CUSTOM SCHEMA)
 # Step 2: modify the functions so that they work one step at a time
 # Step 3: test the functions
 
-def json_document_converter(filename: str, doc_name: str = None) -> DoclingDocument:
-    # code-level, some level of custom code for only 'insight headings', create separate file for custom code
-    with open(filename, 'r') as file:
-        json_data = json.load(file)
-
-    text_items = []
-    paragraph_texts = []
-    text_refs = []
-
-    for key, val in json_data.items():
-        if isinstance(val, list):
-            for item in val:
-                paragraph_texts.append(f'{key}: {item}')
-        else: 
-            paragraph_texts.append(f'{key}: {val}')
-    
-    for i in range(len(paragraph_texts)):
-        text_items.append(TextItem(self_ref=f'#/texts/{i}', label='text', orig=filename, text=paragraph_texts[i]))
-        text_refs.append(RefItem(cref=f'#/texts/{i}'))
-    
-    body_group = GroupItem(
-        name="_root_",
-        self_ref="#/body",
-        content_layer=ContentLayer.BODY,
-        children=[]
-        )   
-    
-    origin_ = DocumentOrigin(mimetype='application/json', filename=filename, binary_hash=0) # set binary_hash = 0 just for functionality -- import hash function only if proceeding with this
-    
-    doc = DoclingDocument(schema_name='DoclingDocument', version='1.5.0', name=doc_name, body=body_group, groups=[body_group], texts=text_items, origin=origin_)
-
-    for i in range(len(text_items)):
-        body_group._add_child(doc=doc, stack=[], new_ref=text_refs[i])
-
-    #for i in range(len(text_refs)):
-    #    text_refs[i].parent = body_group
-
-    return doc
-
-def ingest_files(config, files):
+def ingest_files(config, files, window_size='S'):
     # set embedding model and tokenizer
     # add parameter here so that you can determine hybrid, dense, dense+sparse
 
-    embedding_model='BAAI/bge-m3' # SET AS PARAMETER
+    embedding_model='BAAI/bge-m3'  # 'intfloat/multilingual-e5-large'
 
     ef = BGEM3EmbeddingFunction(model_name=embedding_model, use_fp16=False, device="cpu")
     ef_tokenizer = AutoTokenizer.from_pretrained(embedding_model)
-    # ef_max_tokens = 1024
+
+    # NEW: CONTEXT WINDOW SIZE EMBEDDING PARAMETERS
+    if window_size == 'S':
+        ef_max_tokens = 512
+    elif window_size == 'M':
+        ef_max_tokens = 2048
+    elif window_size == 'L':
+        ef_max_tokens = 8192
+    
+    ef_tokenizer.model_max_length = ef_max_tokens
 
     # convert docs to docling documents and use hybrid chunker
     # here, add other loaders like json loader support -> convert into docling doc
@@ -159,8 +132,7 @@ def ingest_files(config, files):
 
     document_converter = DocumentConverter(format_options=
                                         {
-                                            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
-                                            #InputFormat.MD: MarkdownFormatOption()
+                                            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
                                             })
     
     print(1)
@@ -201,7 +173,7 @@ def ingest_files(config, files):
             start_time = time.time()
             
             if file_ext == 'json':
-                doc = json_document_converter(file_full_path, 'json_doc')
+                doc = json_document_converter(file_full_path)
             else:
                 doc = document_converter.convert(file_full_path).document
 
@@ -233,7 +205,7 @@ def ingest_files(config, files):
             start_time = time.time()
             
             if file_ext == 'json':
-                doc = json_document_converter(file_full_path, 'json_doc').export_to_markdown()
+                doc = json_document_converter(file_full_path).export_to_markdown()
             else: 
                 doc = document_converter.convert(file_full_path).document.export_to_markdown()
             
@@ -273,6 +245,50 @@ def ingest_files(config, files):
         for file in files:
             chunked_document_objects = convert_and_markdown_split(file)
             document_objects += chunked_document_objects
+
+    # NEW: RECURSIVE SPLIT FUNCTIONALITY
+    if EXPORT_TYPE == "RECURSIVE": 
+        def convert_and_recursive_split(file): 
+            file_full_path = file['full_path']
+            filename = file['filename']
+            print(f"Converting {filename} to a markdown document and using markdown splitter...")
+            file_ext = filename.lower().split('.')[-1]
+            #print(file_ext)
+
+            start_time = time.time()
+                        
+            if file_ext == 'json':
+                doc = json_document_converter(file_full_path).export_to_markdown()
+            else: 
+                doc = document_converter.convert(file_full_path).document.export_to_markdown()
+                
+            chunk_size = 500
+            chunk_overlap = 30
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=chunk_size, chunk_overlap=chunk_overlap
+            )
+
+            # # Split
+            # splits = text_splitter.split_documents(md_header_chunks)
+            # chunk
+            chunks = splitter.create_documents([split for split in splitter.split_text(doc)])
+
+            chunked_document_objects = []
+            for chunk in chunks:
+                print(chunk)
+                chunked_document_object = {"page_content": chunk.page_content}
+                chunked_document_object['metadata'] = chunk.metadata
+                chunked_document_object['metadata']['filename'] = filename
+                chunked_document_objects.append(chunked_document_object)
+            end_time = time.time()
+            print(f"Converted {file_full_path} to a markdown document and recursively split\nNumber of chunks: {len(chunked_document_objects)}\nExecution time: {round(end_time - start_time, 2)}")
+            return chunked_document_objects
+
+        document_objects = []
+        for file in files: 
+            chunked_document_objects = convert_and_recursive_split(file)
+            document_objects += chunked_document_objects
+        
             
 
     print(EXPORT_TYPE)
@@ -289,6 +305,8 @@ def ingest_files(config, files):
     if EXPORT_TYPE == "DOCLING_DOCS":
         page_no_list = [str(doc['metadata']['page_no']) for doc in document_objects]
     elif EXPORT_TYPE == "MARKDOWN":
+        page_no_list = ["None"] * len(document_objects)
+    elif EXPORT_TYPE == "RECURSIVE":
         page_no_list = ["None"] * len(document_objects)
 
     # create embeddings
@@ -316,7 +334,7 @@ def ingest_files(config, files):
             name="id", dtype=DataType.VARCHAR, description='IDs', is_primary=True, auto_id=True, max_length=100
         ),
         FieldSchema(name='text', dtype=DataType.VARCHAR, description='text', max_length=65535),
-        FieldSchema(name='page_no', dtype=DataType.VARCHAR, description='page_no', max_length=100),    # comment out these since not every collection needs to include this
+        FieldSchema(name='page_no', dtype=DataType.VARCHAR, description='page_no', max_length=100),   
         FieldSchema(name='filename', dtype=DataType.VARCHAR, description='filename', max_length=300),
         FieldSchema(name="sparse_vector", dtype=DataType.SPARSE_FLOAT_VECTOR, description='sparse embedding vectors'),
         FieldSchema(name="dense_vector", dtype=DataType.FLOAT_VECTOR, description='dense embedding vectors', dim=dense_dim),
